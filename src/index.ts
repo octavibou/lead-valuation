@@ -68,30 +68,45 @@ async function updateLeadRow(
     .eq("id", lead_id);
 }
 
-/** OpenAI provider – Chat Completions (estable) */
-async function fetchPriceM2WithOpenAI(address: string): Promise<number | null> {
+/** OpenAI provider – Chat Completions robusto con JSON forzado y reintento por CP */
+async function fetchPriceM2WithOpenAI(address: string, cp: string): Promise<number | null> {
   if (!OPENAI_API_KEY) return null;
 
-  const prompt = `Dime el precio promedio por metro cuadrado de venta de vivienda en ${address}.
-Responde SOLO en este formato exacto: 6526 €/m². Si no hay datos, responde exactamente: NA.`;
+  const sys = `Eres un extractor de datos inmobiliarios en España.
+Devuelve SIEMPRE JSON válido. Si no tienes un dato fiable, devuelve {"na": true}.
+Cuando tengas dato, devuelve {"price_m2_eur_int": <entero>} con el precio medio de venta por m² (euros/m²). 
+No incluyas texto ni unidades, solo el JSON.`;
 
-  const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.1
-  });
+  const prompts = [
+    `Dame el precio medio de venta por m² de vivienda para esta dirección: "${address}" (España). 
+Si hay dato fiable, responde {"price_m2_eur_int": N}. Si no, responde {"na": true}.`,
+    `Dame el precio medio de venta por m² de vivienda para el código postal ${cp} (España).
+Si hay dato fiable, responde {"price_m2_eur_int": N}. Si no, responde {"na": true}.`
+  ];
 
-  const text = (r?.choices?.[0]?.message?.content ?? "").trim();
-  if (!text) return null;
+  for (const p of prompts) {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 60,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: p }
+      ],
+    });
 
-  const match = text.match(/(\d{3,6}(?:[.,]\d{1,3})?)/);
-  if (!match || !match[1]) return null;
-
-  const normalized = match[1].replace(/\./g, "").replace(",", ".");
-  const n = Number(normalized);
-  if (!Number.isFinite(n)) return null;
-
-  return Math.round(n);
+    const raw = r?.choices?.[0]?.message?.content ?? "";
+    try {
+      const obj = JSON.parse(raw);
+      if (obj?.price_m2_eur_int && Number.isInteger(obj.price_m2_eur_int)) {
+        return obj.price_m2_eur_int as number;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 /** App */
@@ -117,7 +132,7 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
 
     // 2) OpenAI si no hay cache fresca
     if (!price) {
-      price = await fetchPriceM2WithOpenAI(body.address);
+      price = await fetchPriceM2WithOpenAI(body.address, cp);
       if (price) {
         source = "openai";
         await upsertCache(cp, price, source, 90);
