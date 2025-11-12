@@ -68,45 +68,44 @@ async function updateLeadRow(
     .eq("id", lead_id);
 }
 
-/** OpenAI provider – Chat Completions robusto con JSON forzado y reintento por CP */
-async function fetchPriceM2WithOpenAI(address: string, cp: string): Promise<number | null> {
+/** OpenAI provider – GPT‑4o con browsing activado (consultas reales en Idealista, Fotocasa, RealAdvisor) */
+async function fetchPriceM2WithBrowsing(address: string, cp: string): Promise<number | null> {
   if (!OPENAI_API_KEY) return null;
 
-  const sys = `Eres un extractor de datos inmobiliarios en España.
-Devuelve SIEMPRE JSON válido. Si no tienes un dato fiable, devuelve {"na": true}.
-Cuando tengas dato, devuelve {"price_m2_eur_int": <entero>} con el precio medio de venta por m² (euros/m²). 
-No incluyas texto ni unidades, solo el JSON.`;
+  const sys = `Eres un analista inmobiliario en España con acceso a la web (Idealista, Fotocasa, RealAdvisor, Pisos.com).
+Tu tarea es obtener el precio medio de venta por metro cuadrado (€/m²) de viviendas residenciales en una zona concreta.
+Utiliza las fuentes más recientes disponibles y si no hay datos exactos, estima un valor coherente basándote en zonas similares.
+Devuelve SIEMPRE JSON válido, sin texto adicional.
+Ejemplo de salida válida: {"price_m2_eur_int": 3150, "source": "gpt4o_web"}.`;
 
-  const prompts = [
-    `Dame el precio medio de venta por m² de vivienda para esta dirección: "${address}" (España). 
-Si hay dato fiable, responde {"price_m2_eur_int": N}. Si no, responde {"na": true}.`,
-    `Dame el precio medio de venta por m² de vivienda para el código postal ${cp} (España).
-Si hay dato fiable, responde {"price_m2_eur_int": N}. Si no, responde {"na": true}.`
-  ];
+  const userPrompt = `Busca en Idealista, Fotocasa o RealAdvisor el precio medio de venta por m² en "${address}", código postal ${cp}, España.
+Prioriza resultados recientes y enfocados en vivienda residencial.
+Devuelve solo JSON con la estructura {"price_m2_eur_int": <entero>, "source": "gpt4o_web"}.
+No incluyas explicaciones.`;
 
-  for (const p of prompts) {
+  try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 60,
+      model: "gpt-4o",
+      modalities: ["text", "web"], // habilita navegación web
+      temperature: 0.2,
+      max_tokens: 150,
       messages: [
         { role: "system", content: sys },
-        { role: "user", content: p }
+        { role: "user", content: userPrompt },
       ],
+      response_format: { type: "json_object" },
     });
 
     const raw = r?.choices?.[0]?.message?.content ?? "";
-    try {
-      const obj = JSON.parse(raw);
-      if (obj?.price_m2_eur_int && Number.isInteger(obj.price_m2_eur_int)) {
-        return obj.price_m2_eur_int as number;
-      }
-    } catch {
-      continue;
+    const obj = JSON.parse(raw);
+    if (obj?.price_m2_eur_int && Number.isInteger(obj.price_m2_eur_int)) {
+      return obj.price_m2_eur_int as number;
     }
+    return null;
+  } catch (err) {
+    console.error("[fetchPriceM2WithBrowsing] Error:", err);
+    return null;
   }
-  return null;
 }
 
 /** App */
@@ -132,7 +131,7 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
 
     // 2) OpenAI si no hay cache fresca
     if (!price) {
-      price = await fetchPriceM2WithOpenAI(body.address, cp);
+      price = await fetchPriceM2WithBrowsing(body.address, cp);
       if (price) {
         source = "openai";
         await upsertCache(cp, price, source, 90);
