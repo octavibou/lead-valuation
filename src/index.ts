@@ -69,25 +69,31 @@ async function updateLeadRow(
 }
 
 /** OpenAI provider – GPT‑4o con browsing activado (consultas reales en Idealista, Fotocasa, RealAdvisor) */
-async function fetchPriceM2WithBrowsing(address: string, cp: string): Promise<number | null> {
-  if (!OPENAI_API_KEY) return null;
+async function fetchPriceM2WithBrowsing(address: string, cp: string): Promise<{ price: number | null, detail?: any }> {
+  if (!OPENAI_API_KEY) return { price: null };
 
-  const sys = `Eres un analista inmobiliario en España con acceso a la web (Idealista, Fotocasa, RealAdvisor, Pisos.com).
-Tu tarea es obtener el precio medio de venta por metro cuadrado (€/m²) de viviendas residenciales en una zona concreta.
-Utiliza las fuentes más recientes disponibles y si no hay datos exactos, estima un valor coherente basándote en zonas similares.
-Devuelve SIEMPRE JSON válido, sin texto adicional.
-Ejemplo de salida válida: {"price_m2_eur_int": 3150, "source": "gpt4o_web"}.`;
+  const sys = `Eres un analista inmobiliario en España con acceso a Idealista, Fotocasa y RealAdvisor.
+Tu tarea es obtener el precio medio de venta por m² de viviendas residenciales para una dirección específica.
+Busca en las 3 webs, extrae el valor medio más fiable de cada una y devuelve el promedio general.
 
-  const userPrompt = `Busca en Idealista, Fotocasa o RealAdvisor el precio medio de venta por m² en "${address}", código postal ${cp}, España.
-Prioriza resultados recientes y enfocados en vivienda residencial.
-Devuelve solo JSON con la estructura {"price_m2_eur_int": <entero>, "source": "gpt4o_web"}.
-No incluyas explicaciones.`;
+Devuelve SIEMPRE un JSON con esta estructura exacta:
+{
+  "idealista": <número o null>,
+  "fotocasa": <número o null>,
+  "realadvisor": <número o null>,
+  "average_price_m2": <número o null>,
+  "sources_found": [ "idealista", "fotocasa", "realadvisor" ]
+}`;
+
+  const userPrompt = `Dirección: "${address}", código postal ${cp}, España.
+Obtén el precio medio por m² de vivienda residencial según Idealista, Fotocasa y RealAdvisor.
+Devuelve SOLO JSON válido con los campos definidos.`;
 
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o",
       temperature: 0.2,
-      max_tokens: 150,
+      max_tokens: 250,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: userPrompt },
@@ -97,13 +103,23 @@ No incluyas explicaciones.`;
 
     const raw = r?.choices?.[0]?.message?.content ?? "";
     const obj = JSON.parse(raw);
-    if (obj?.price_m2_eur_int && Number.isInteger(obj.price_m2_eur_int)) {
-      return obj.price_m2_eur_int as number;
-    }
-    return null;
+
+    const vals = [obj.idealista, obj.fotocasa, obj.realadvisor].filter(v => typeof v === "number" && !isNaN(v));
+    const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+
+    return {
+      price: avg,
+      detail: {
+        idealista: obj.idealista ?? null,
+        fotocasa: obj.fotocasa ?? null,
+        realadvisor: obj.realadvisor ?? null,
+        average: avg,
+        sources_found: obj.sources_found ?? []
+      }
+    };
   } catch (err) {
     console.error("[fetchPriceM2WithBrowsing] Error:", err);
-    return null;
+    return { price: null };
   }
 }
 
@@ -127,14 +143,17 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
     // 1) cache
     let price: number | null = await getCachedPrice(cp);
     let source: Source = price ? "cached" : "na";
+    var source_detail = {};
 
     // 2) OpenAI si no hay cache fresca
     if (!price) {
-      price = await fetchPriceM2WithBrowsing(body.address, cp);
+      const result = await fetchPriceM2WithBrowsing(body.address, cp);
+      price = result.price;
       if (price) {
         source = "openai";
         await upsertCache(cp, price, source, 90);
       }
+      source_detail = result.detail || {};
     }
 
     const valuation_price =
@@ -150,7 +169,8 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
       valuation_price,
       source,
       confidence,
-      valuation_at: nowIso()
+      valuation_at: nowIso(),
+      source_detail,
     });
   } catch (e) {
     console.error("[/valuation/v1/price-m2] error:", e);
