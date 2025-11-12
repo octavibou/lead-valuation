@@ -2,7 +2,8 @@
   "name": "lead-valuation",
   "version": "1.0.0",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": { "node": "20.x", "npm": "10.x" },
+  "packageManager": "npm@10",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
