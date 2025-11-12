@@ -7,11 +7,11 @@ const PORT = Number(process.env.PORT || 8080);
 const API_KEY = process.env.API_GATEWAY_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE || "";
 
 /** Clients */
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
 
 /** Helpers */
 const CP_REGEX = /\b\d{5}\b/;
