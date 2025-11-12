@@ -86,7 +86,6 @@ No incluyas explicaciones.`;
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o",
-      modalities: ["text", "web"], // habilita navegación web
       temperature: 0.2,
       max_tokens: 150,
       messages: [
