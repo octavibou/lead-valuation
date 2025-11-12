@@ -98,13 +98,8 @@ Responde SOLO en este formato exacto: 6526 €/m². Si no hay datos, responde ex
 const app = express();
 app.use(express.json());
 
-// Auth sencilla por header
-app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!API_KEY || req.header("x-api-key") !== API_KEY) {
-    return res.status(401).json({ error: "unauthorized" });
-  }
-  next();
-});
+// Auth desactivada temporalmente para pruebas
+app.use((_req: Request, _res: Response, next: NextFunction) => next());
 
 app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
   try {
