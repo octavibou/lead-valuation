@@ -131,13 +131,23 @@ app.use(express.json());
 app.use((_req: Request, _res: Response, next: NextFunction) => next());
 
 app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
+  console.log("[VAL-MS] 📨 Request recibido en /valuation/v1/price-m2");
+  console.log("[VAL-MS] 🔎 query:", req.query);
+  console.log("[VAL-MS] 🔎 body:", req.body);
+
   try {
-    const body = req.body as InBody;
-    if (!body?.lead_id || !body?.address) {
+    const body = req.body || {};
+    const query = req.query || {};
+
+    const leadId = body.lead_id || body.leadId || query.lead_id || query.leadId;
+    const address = body.address || query.address;
+
+    if (!leadId || !address) {
+      console.warn("[VAL-MS] ❌ Falta lead_id o address", { leadId, address });
       return res.status(400).json({ error: "lead_id y address son obligatorios" });
     }
 
-    const cp = body.postal_code || (body.address.match(CP_REGEX)?.[0] ?? "").trim();
+    const cp = body.postal_code || (address.match(CP_REGEX)?.[0] ?? "").trim();
     if (!cp) return res.status(400).json({ error: "no se pudo detectar el CP" });
 
     // 1) cache
@@ -147,7 +157,7 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
 
     // 2) OpenAI si no hay cache fresca
     if (!price) {
-      const result = await fetchPriceM2WithBrowsing(body.address, cp);
+      const result = await fetchPriceM2WithBrowsing(address, cp);
       price = result.price;
       if (price) {
         source = "openai";
@@ -161,10 +171,10 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
 
     const confidence = price ? (source === "openai" || source === "cached" ? 85 : 60) : 0;
 
-    await updateLeadRow(body.lead_id, price ?? null, valuation_price, source, confidence);
+    await updateLeadRow(leadId, price ?? null, valuation_price, source, confidence);
 
     return res.json({
-      lead_id: body.lead_id,
+      lead_id: leadId,
       price_m2: price,
       valuation_price,
       source,
