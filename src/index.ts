@@ -139,21 +139,60 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
     const body = req.body || {};
     const query = req.query || {};
 
-    const leadId = body.lead_id || body.leadId || query.lead_id || query.leadId;
-    const address = body.address || query.address;
+    // Normalizar leadId y address
+    const leadId =
+      body.lead_id ||
+      body.leadId ||
+      query.lead_id ||
+      query.leadId;
+
+    const address =
+      body.address ||
+      query.address;
 
     if (!leadId || !address) {
       console.warn("[VAL-MS] ❌ Falta lead_id o address", { leadId, address });
-      return res.status(400).json({ error: "lead_id y address son obligatorios" });
+      return res
+        .status(400)
+        .json({ error: "lead_id y address son obligatorios" });
     }
 
-    const cp = body.postal_code || (address.match(CP_REGEX)?.[0] ?? "").trim();
-    if (!cp) return res.status(400).json({ error: "no se pudo detectar el CP" });
+    // Normalizar property_m2 (desde body o query, con compatibilidad antigua square_meters)
+    const propertyM2Raw =
+      (body as any).property_m2 ??
+      (body as any).propertyM2 ??
+      (body as any).square_meters ??
+      (query as any).property_m2 ??
+      (query as any).propertyM2 ??
+      (query as any).square_meters ??
+      null;
 
-    // 1) cache
+    let propertyM2: number | null = null;
+    if (typeof propertyM2Raw === "number") {
+      propertyM2 = Number.isNaN(propertyM2Raw) ? null : propertyM2Raw;
+    } else if (
+      typeof propertyM2Raw === "string" &&
+      propertyM2Raw.trim() !== ""
+    ) {
+      const parsed = Number(propertyM2Raw.trim());
+      propertyM2 = Number.isNaN(parsed) ? null : parsed;
+    }
+
+    // Detectar CP
+    const cp =
+      body.postal_code ||
+      (address.match(CP_REGEX)?.[0] ?? "").trim();
+
+    if (!cp) {
+      return res
+        .status(400)
+        .json({ error: "no se pudo detectar el CP" });
+    }
+
+    // 1) Cache
     let price: number | null = await getCachedPrice(cp);
     let source: Source = price ? "cached" : "na";
-    var source_detail = {};
+    let source_detail: any = {};
 
     // 2) OpenAI si no hay cache fresca
     if (!price) {
@@ -166,17 +205,38 @@ app.post("/valuation/v1/price-m2", async (req: Request, res: Response) => {
       source_detail = result.detail || {};
     }
 
-    const valuation_price =
-      price && body.square_meters ? Math.round(price * body.square_meters) : null;
+    // 3) Calcular valoración total: price_m2 * property_m2
+    let valuationPrice: number | null = null;
+    if (
+      typeof price === "number" &&
+      typeof propertyM2 === "number" &&
+      price > 0 &&
+      propertyM2 > 0
+    ) {
+      valuationPrice = Math.round(price * propertyM2);
+    }
 
-    const confidence = price ? (source === "openai" || source === "cached" ? 85 : 60) : 0;
+    const confidence = price
+      ? source === "openai" || source === "cached"
+        ? 85
+        : 60
+      : 0;
 
-    await updateLeadRow(leadId, price ?? null, valuation_price, source, confidence);
+    // 4) Actualizar fila del lead
+    await updateLeadRow(
+      leadId,
+      price ?? null,
+      valuationPrice,
+      source,
+      confidence
+    );
 
+    // 5) Respuesta
     return res.json({
       lead_id: leadId,
-      price_m2: price,
-      valuation_price,
+      price_m2: price ?? null,
+      valuation_price: valuationPrice,
+      property_m2: propertyM2,
       source,
       confidence,
       valuation_at: nowIso(),
